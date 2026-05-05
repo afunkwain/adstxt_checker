@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>AdsTxt Radar — Google.com Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Clash+Display:wght@400;600;700&family=Cabinet+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Root ───────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #07080f;
+  --surf:     #0e0f1a;
+  --card:     #13141f;
+  --border:   rgba(255,255,255,0.07);
+  --accent:   #00e5a0;
+  --blue:     #4f8ef7;
+  --danger:   #ff4d6d;
+  --warn:     #ffc107;
+  --text:     #dde1f0;
+  --muted:    #555775;
+  --mono:     'DM Mono', monospace;
+  --head:     'Cabinet Grotesk', sans-serif;
+  --radius:   14px;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--head);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Animated grid backdrop */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 0;
+  background-image:
+    linear-gradient(rgba(0,229,160,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,229,160,0.025) 1px, transparent 1px);
+  background-size: 50px 50px;
+  animation: gridShift 20s linear infinite;
+}
+@keyframes gridShift {
+  0%   { background-position: 0 0; }
+  100% { background-position: 50px 50px; }
+}
+
+/* Glow orb */
+body::after {
+  content: '';
+  position: fixed;
+  top: -200px; left: 50%;
+  transform: translateX(-50%);
+  width: 600px; height: 600px;
+  background: radial-gradient(circle, rgba(0,229,160,0.07) 0%, transparent 70%);
+  pointer-events: none; z-index: 0;
+}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+.wrap {
+  position: relative; z-index: 1;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 56px 24px 100px;
+}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+header { margin-bottom: 52px; }
+
+.logo-row {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 20px;
+}
+.logo-icon {
+  width: 44px; height: 44px;
+  background: var(--accent);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+  box-shadow: 0 0 30px rgba(0,229,160,0.3);
+  flex-shrink: 0;
+}
+.logo-tag {
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: 3px; color: var(--accent);
+  text-transform: uppercase;
+}
+
+h1 {
+  font-size: clamp(30px, 5vw, 52px);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -1.5px;
+  color: #fff;
+}
+h1 em { color: var(--accent); font-style: normal; }
+.subtitle {
+  font-family: var(--mono); font-size: 13px;
+  color: var(--muted); margin-top: 14px; line-height: 1.7;
+  max-width: 560px;
+}
+
+/* ── Input Panel ────────────────────────────────────────────────── */
+.panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+  margin-bottom: 20px;
+  position: relative;
+  overflow: hidden;
+}
+.panel::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--blue));
+}
+.panel-label {
+  font-size: 11px; font-family: var(--mono);
+  letter-spacing: 2px; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 18px;
+}
+
+/* Upload zone */
+.drop-zone {
+  border: 2px dashed rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 44px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  background: rgba(0,0,0,0.2);
+}
+.drop-zone:hover, .drop-zone.over {
+  border-color: var(--accent);
+  background: rgba(0,229,160,0.04);
+}
+.drop-zone input[type=file] {
+  position: absolute; inset: 0; opacity: 0;
+  cursor: pointer; width: 100%; height: 100%;
+}
+.drop-icon { font-size: 36px; margin-bottom: 10px; display: block; }
+.drop-title { font-size: 16px; font-weight: 700; color: #fff; }
+.drop-hint { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 6px; }
+.drop-file-name {
+  margin-top: 10px; font-family: var(--mono); font-size: 12px;
+  color: var(--accent); display: none;
+}
+
+/* Divider */
+.divider {
+  display: flex; align-items: center; gap: 14px;
+  margin: 22px 0;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--muted); letter-spacing: 2px;
+}
+.divider::before, .divider::after {
+  content: ''; flex: 1; height: 1px;
+  background: var(--border);
+}
+
+/* Textarea */
+textarea {
+  width: 100%;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 18px;
+  resize: vertical; min-height: 130px;
+  outline: none; line-height: 1.9;
+  transition: border-color 0.2s;
+}
+textarea:focus { border-color: var(--accent); }
+textarea::placeholder { color: var(--muted); }
+
+/* Controls */
+.controls {
+  display: flex; gap: 12px; margin-top: 20px;
+  align-items: center; flex-wrap: wrap;
+}
+.speed-wrap {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 12px; color: var(--muted);
+}
+.speed-wrap select {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border);
+  color: var(--text); font-family: var(--mono); font-size: 12px;
+  padding: 7px 12px; border-radius: 8px; outline: none; cursor: pointer;
+}
+
+/* Buttons */
+.btn {
+  font-family: var(--mono); font-size: 12px; font-weight: 500;
+  letter-spacing: 1px; border: none; border-radius: 9px;
+  padding: 13px 26px; cursor: pointer;
+  transition: all 0.2s; text-transform: uppercase;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.btn-run {
+  background: var(--accent); color: #000; font-weight: 700;
+  flex: 1; justify-content: center; min-width: 160px;
+  box-shadow: 0 0 24px rgba(0,229,160,0.2);
+}
+.btn-run:hover:not(:disabled) {
+  background: #00ffb3;
+  box-shadow: 0 0 36px rgba(0,229,160,0.35);
+  transform: translateY(-1px);
+}
+.btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-clear {
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border);
+}
+.btn-clear:hover { border-color: var(--text); color: var(--text); }
+
+.btn-csv {
+  background: var(--blue); color: #fff;
+  box-shadow: 0 0 20px rgba(79,142,247,0.2);
+}
+.btn-csv:hover { background: #6fa3ff; transform: translateY(-1px); }
+
+.btn-excel {
+  background: #1d6f42; color: #fff;
+  box-shadow: 0 0 20px rgba(29,111,66,0.2);
+}
+.btn-excel:hover { background: #228B52; transform: translateY(-1px); }
+
+/* ── Progress ───────────────────────────────────────────────────── */
+#progressSection { display: none; margin-bottom: 20px; }
+
+.prog-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 32px;
+}
+.prog-top {
+  display: flex; justify-content: space-between;
+  align-items: center; margin-bottom: 14px;
+}
+.prog-label { font-weight: 700; color: #fff; font-size: 15px; }
+.prog-pct { font-family: var(--mono); font-size: 22px; font-weight: 500; color: var(--accent); }
+
+.prog-track {
+  height: 8px; background: rgba(255,255,255,0.06);
+  border-radius: 99px; overflow: hidden;
+}
+.prog-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--blue));
+  border-radius: 99px;
+  transition: width 0.4s ease;
+  width: 0%;
+  position: relative;
+}
+.prog-fill::after {
+  content: '';
+  position: absolute; right: 0; top: 50%;
+  transform: translateY(-50%);
+  width: 14px; height: 14px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--accent);
+}
+
+.prog-meta {
+  display: flex; justify-content: space-between;
+  margin-top: 10px;
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+
+/* Spinning status dots */
+.status-dots { display: flex; gap: 5px; margin-top: 14px; }
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); opacity: 0.3;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.dot:nth-child(2) { animation-delay: 0.2s; }
+.dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes pulse {
+  0%,100% { opacity: 0.3; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.4); }
+}
+
+/* ── Stats Row ──────────────────────────────────────────────────── */
+#statsSection { display: none; margin-bottom: 20px; }
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+.stat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  position: relative; overflow: hidden;
+  transition: transform 0.2s;
+}
+.stat-card:hover { transform: translateY(-2px); }
+.stat-card::after {
+  content: '';
+  position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
+}
+.stat-green::after  { background: var(--accent); }
+.stat-red::after    { background: var(--danger); }
+.stat-blue::after   { background: var(--blue); }
+.stat-gray::after   { background: var(--muted); }
+.stat-warn::after   { background: var(--warn); }
+
+.stat-num {
+  font-size: 34px; font-weight: 800;
+  font-family: var(--mono); line-height: 1;
+  color: #fff;
+}
+.stat-green .stat-num  { color: var(--accent); }
+.stat-red .stat-num    { color: var(--danger); }
+.stat-blue .stat-num   { color: var(--blue); }
+.stat-warn .stat-num   { color: var(--warn); }
+
+.stat-lbl {
+  font-size: 11px; font-family: var(--mono);
+  color: var(--muted); margin-top: 5px;
+  letter-spacing: 1px; text-transform: uppercase;
+}
+.stat-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+/* ── Results Table ──────────────────────────────────────────────── */
+#resultsSection { display: none; }
+
+.results-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.table-toolbar {
+  padding: 20px 24px;
+  display: flex; justify-content: space-between;
+  align-items: center; flex-wrap: wrap; gap: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.filter-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tab {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 1px;
+  padding: 6px 14px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--muted); transition: all 0.15s; text-transform: uppercase;
+}
+.tab:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+.tab.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; }
+
+.search-box {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--mono); font-size: 12px;
+  padding: 8px 14px; outline: none; width: 220px;
+}
+.search-box:focus { border-color: var(--accent); }
+.search-box::placeholder { color: var(--muted); }
+
+.export-row {
+  padding: 16px 24px;
+  display: flex; gap: 10px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0,0,0,0.15);
+}
+
+.table-wrap { overflow-x: auto; max-height: 540px; overflow-y: auto; }
+
+/* Custom scrollbar */
+.table-wrap::-webkit-scrollbar { width: 6px; height: 6px; }
+.table-wrap::-webkit-scrollbar-track { background: transparent; }
+.table-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+table { width: 100%; border-collapse: collapse; min-width: 600px; }
+thead th {
+  background: rgba(0,0,0,0.4);
+  padding: 13px 18px;
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: 2px; text-transform: uppercase;
+  color: var(--muted); font-weight: 500;
+  text-align: left; position: sticky; top: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer; user-select: none;
+  white-space: nowrap;
+}
+thead th:hover { color: var(--text); }
+thead th .sort-icon { margin-left: 4px; opacity: 0.4; font-size: 10px; }
+
+tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.15s;
+}
+tbody tr:hover { background: rgba(255,255,255,0.03); }
+tbody tr:last-child { border-bottom: none; }
+
+td {
+  padding: 12px 18px;
+  font-size: 13px; vertical-align: middle;
+}
+td.domain-cell {
+  font-family: var(--mono); font-size: 12px; color: var(--text);
+  max-width: 280px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Status badges */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  padding: 4px 10px; border-radius: 6px; white-space: nowrap;
+}
+.badge-success { background: rgba(0,229,160,0.12); color: var(--accent); }
+.badge-fail    { background: rgba(255,77,109,0.12); color: var(--danger); }
+.badge-404     { background: rgba(255,193,7,0.12);  color: var(--warn); }
+.badge-other   { background: rgba(100,100,130,0.15); color: var(--muted); }
+
+.google-yes { color: var(--accent); font-weight: 700; font-family: var(--mono); font-size: 12px; }
+.google-no  { color: var(--muted);  font-family: var(--mono); font-size: 12px; }
+
+.code-cell { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.err-cell  { font-family: var(--mono); font-size: 11px; color: rgba(255,77,109,0.7); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.no-results {
+  padding: 60px; text-align: center;
+  font-family: var(--mono); font-size: 13px; color: var(--muted);
+}
+
+/* Row count */
+.row-count {
+  padding: 12px 24px;
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  border-top: 1px solid var(--border);
+  background: rgba(0,0,0,0.15);
+}
+
+/* ── Toast ──────────────────────────────────────────────────────── */
+.toast {
+  position: fixed; bottom: 28px; right: 28px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 20px;
+  font-family: var(--mono); font-size: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  transform: translateY(80px); opacity: 0;
+  transition: all 0.3s ease; z-index: 99;
+  max-width: 300px;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.err { border-color: rgba(255,77,109,0.4); color: var(--danger); }
+.toast.ok  { border-color: rgba(0,229,160,0.4); color: var(--accent); }
+
+/* ── Animations ─────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fadeUp 0.4s ease both; }
+.fade-up-2 { animation: fadeUp 0.4s 0.1s ease both; }
+.fade-up-3 { animation: fadeUp 0.4s 0.2s ease both; }
+
+/* ── Responsive ─────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .panel { padding: 20px; }
+  .controls { flex-direction: column; }
+  .btn-run { width: 100%; }
+  .table-toolbar { flex-direction: column; align-items: flex-start; }
+  .search-box { width: 100%; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <header class="fade-up">
+    <div class="logo-row">
+      <div class="logo-icon">📡</div>
+      <span class="logo-tag">AdsTxt Radar v1.0</span>
+    </div>
+    <h1>Check who's running<br><em>Google Ads</em> on your domains</h1>
+    <p class="subtitle">
+      Upload an Excel file or paste domains below. The tool fetches each domain's
+      <code>ads.txt</code> and checks for <code>google.com</code> — fast, bulk, exportable.
+    </p>
+  </header>
+
+  <!-- Input Panel -->
+  <div class="panel fade-up-2">
+    <div class="panel-label">01 — Input Domains</div>
+
+    <!-- Excel Drop Zone -->
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" />
+      <span class="drop-icon">📊</span>
+      <div class="drop-title">Drop your Excel file here</div>
+      <div class="drop-hint">.xlsx · .xls · .csv — one domain per cell</div>
+      <div class="drop-file-name" id="fileName">—</div>
+    </div>
+
+    <div class="divider">or paste domains</div>
+
+    <textarea id="domainsInput" placeholder="example.com&#10;anotherdomain.org&#10;website.net&#10;...one per line"></textarea>
+
+    <div class="controls">
+      <div class="speed-wrap">
+        ⚡ Speed:
+        <select id="speedSelect">
+          <option value="10">Careful (10)</option>
+          <option value="20" selected>Normal (20)</option>
+          <option value="30">Fast (30)</option>
+          <option value="50">Turbo (50)</option>
+        </select>
+      </div>
+      <button class="btn btn-clear" onclick="clearAll()">✕ Clear</button>
+      <button class="btn btn-run" id="runBtn" onclick="startScan()">
+        ▶ Run Scan
+      </button>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div id="progressSection">
+    <div class="prog-panel">
+      <div class="prog-top">
+        <div>
+          <div class="prog-label">Scanning domains…</div>
+          <div class="status-dots">
+            <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+          </div>
+        </div>
+        <div class="prog-pct" id="progPct">0%</div>
+      </div>
+      <div class="prog-track">
+        <div class="prog-fill" id="progFill"></div>
+      </div>
+      <div class="prog-meta">
+        <span id="progCount">0 / 0 domains</span>
+        <span id="progEta">Estimating…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div id="statsSection">
+    <div class="stats-grid">
+      <div class="stat-card stat-blue">
+        <div class="stat-num" id="statTotal">0</div>
+        <div class="stat-lbl">Total Checked</div>
+      </div>
+      <div class="stat-card stat-green">
+        <div class="stat-num" id="statGoogle">0</div>
+        <div class="stat-lbl">Google.com Found</div>
+        <div class="stat-sub" id="statGooglePct"></div>
+      </div>
+      <div class="stat-card stat-gray">
+        <div class="stat-num" id="statSuccess">0</div>
+        <div class="stat-lbl">Ads.txt Loaded</div>
+      </div>
+      <div class="stat-card stat-warn">
+        <div class="stat-num" id="stat404">0</div>
+        <div class="stat-lbl">Not Found (404)</div>
+      </div>
+      <div class="stat-card stat-red">
+        <div class="stat-num" id="statFail">0</div>
+        <div class="stat-lbl">Failed / Timeout</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num" id="statTime">—</div>
+        <div class="stat-lbl">Seconds Elapsed</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results Table -->
+  <div id="resultsSection">
+    <div class="results-panel">
+
+      <div class="table-toolbar">
+        <div class="filter-tabs">
+          <button class="tab active" onclick="setFilter('all', this)">All</button>
+          <button class="tab" onclick="setFilter('yes', this)">✅ Google Found</button>
+          <button class="tab" onclick="setFilter('no', this)">❌ Not Found</button>
+          <button class="tab" onclick="setFilter('success', this)">Loaded</button>
+          <button class="tab" onclick="setFilter('failed', this)">Failed</button>
+        </div>
+        <input class="search-box" id="searchBox" placeholder="🔍 search domain…" oninput="renderTable()">
+      </div>
+
+      <div class="export-row">
+        <button class="btn btn-csv" onclick="exportFile('csv')">⬇ Export CSV</button>
+        <button class="btn btn-excel" onclick="exportFile('excel')">⬇ Export Excel</button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th onclick="sortBy('domain')">Domain <span class="sort-icon">⇅</span></th>
+              <th onclick="sortBy('status')">Status <span class="sort-icon">⇅</span></th>
+              <th onclick="sortBy('google')">Google.com <span class="sort-icon">⇅</span></th>
+              <th onclick="sortBy('status_code')">HTTP Code <span class="sort-icon">⇅</span></th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+        <div class="no-results" id="noResults" style="display:none">No matching results</div>
+      </div>
+
+      <div class="row-count" id="rowCount"></div>
+    </div>
+  </div>
+
+</div><!-- /wrap -->
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────
+let allResults  = [];
+let currentFilter = 'all';
+let sortCol     = 'domain';
+let sortAsc     = true;
+let currentJobId = null;
+let pollTimer   = null;
+let selectedFile = null;
+
+// ── File drag & drop ─────────────────────────────────────────────
+const dropZone  = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('over');
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) setFile(fileInput.files[0]);
+});
+
+function setFile(f) {
+  selectedFile = f;
+  const nameEl = document.getElementById('fileName');
+  nameEl.textContent = `📎 ${f.name} (${(f.size/1024).toFixed(1)} KB)`;
+  nameEl.style.display = 'block';
+  document.getElementById('domainsInput').value = '';
+  toast(`File loaded: ${f.name}`, 'ok');
+}
+
+// ── Start scan ───────────────────────────────────────────────────
+async function startScan() {
+  const textarea = document.getElementById('domainsInput').value.trim();
+  if (!selectedFile && !textarea) {
+    toast('Please upload an Excel file or paste some domains.', 'err');
+    return;
+  }
+
+  // Reset UI
+  allResults = [];
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('progressSection').style.display = 'block';
+  document.getElementById('statsSection').style.display    = 'none';
+  document.getElementById('resultsSection').style.display  = 'none';
+  setProgress(0, 0, 0);
+
+  let response;
+  try {
+    if (selectedFile) {
+      const fd = new FormData();
+      fd.append('file', selectedFile);
+      response = await fetch('/api/check', { method: 'POST', body: fd });
+    } else {
+      response = await fetch('/api/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains: textarea })
+      });
+    }
+  } catch (e) {
+    toast('Cannot connect to server. Is app.py running?', 'err');
+    document.getElementById('runBtn').disabled = false;
+    return;
+  }
+
+  const data = await response.json();
+  if (data.error) { toast(data.error, 'err'); document.getElementById('runBtn').disabled = false; return; }
+
+  currentJobId = data.job_id;
+  startPolling(data.total);
+}
+
+// ── Polling ──────────────────────────────────────────────────────
+let pollStart;
+
+function startPolling(total) {
+  pollStart = Date.now();
+  pollTimer = setInterval(async () => {
+    try {
+      const res  = await fetch(`/api/status/${currentJobId}`);
+      const data = await res.json();
+
+      setProgress(data.done, data.total, data.elapsed);
+
+      if (data.finished) {
+        clearInterval(pollTimer);
+        allResults = data.results;
+        showResults(data.elapsed);
+      }
+    } catch(e) { /* retry next tick */ }
+  }, 700);
+}
+
+function setProgress(done, total, elapsed) {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  document.getElementById('progFill').style.width = pct + '%';
+  document.getElementById('progPct').textContent   = pct + '%';
+  document.getElementById('progCount').textContent = `${done} / ${total} domains`;
+
+  if (done > 0 && elapsed) {
+    const rate  = done / elapsed;
+    const left  = (total - done) / rate;
+    document.getElementById('progEta').textContent =
+      left < 1 ? 'Almost done…' : `~${Math.ceil(left)}s remaining`;
+  }
+}
+
+// ── Show Results ─────────────────────────────────────────────────
+function showResults(elapsed) {
+  document.getElementById('progressSection').style.display = 'none';
+  document.getElementById('runBtn').disabled = false;
+
+  // Compute stats
+  const google  = allResults.filter(r => r.google === 'Yes').length;
+  const success = allResults.filter(r => r.status === 'Success').length;
+  const notFound= allResults.filter(r => r.status === 'Not Found').length;
+  const failed  = allResults.filter(r => !['Success','Not Found'].includes(r.status)).length;
+  const pct     = allResults.length ? Math.round((google / allResults.length) * 100) : 0;
+
+  document.getElementById('statTotal').textContent    = allResults.length;
+  document.getElementById('statGoogle').textContent   = google;
+  document.getElementById('statGooglePct').textContent= pct + '% of all domains';
+  document.getElementById('statSuccess').textContent  = success;
+  document.getElementById('stat404').textContent      = notFound;
+  document.getElementById('statFail').textContent     = failed;
+  document.getElementById('statTime').textContent     = elapsed ? elapsed + 's' : '—';
+
+  document.getElementById('statsSection').style.display   = 'grid';
+  document.getElementById('resultsSection').style.display = 'block';
+
+  currentFilter = 'all';
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab')[0].classList.add('active');
+  document.getElementById('searchBox').value = '';
+  sortCol = 'domain'; sortAsc = true;
+  renderTable();
+
+  toast(`✅ Done! ${allResults.length} domains checked in ${elapsed}s`, 'ok');
+}
+
+// ── Table Rendering ──────────────────────────────────────────────
+function setFilter(f, btn) {
+  currentFilter = f;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  renderTable();
+}
+
+function sortBy(col) {
+  if (sortCol === col) { sortAsc = !sortAsc; } else { sortCol = col; sortAsc = true; }
+  renderTable();
+}
+
+function renderTable() {
+  const search = document.getElementById('searchBox').value.toLowerCase();
+
+  let rows = allResults.filter(r => {
+    if (search && !r.domain.includes(search)) return false;
+    if (currentFilter === 'yes')     return r.google === 'Yes';
+    if (currentFilter === 'no')      return r.google === 'No';
+    if (currentFilter === 'success') return r.status === 'Success';
+    if (currentFilter === 'failed')  return r.status !== 'Success' && r.status !== 'Not Found';
+    return true;
+  });
+
+  rows.sort((a, b) => {
+    let va = a[sortCol] ?? '', vb = b[sortCol] ?? '';
+    if (typeof va === 'number') return sortAsc ? va - vb : vb - va;
+    return sortAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+  });
+
+  const tbody = document.getElementById('tableBody');
+  if (!rows.length) {
+    tbody.innerHTML = '';
+    document.getElementById('noResults').style.display = 'block';
+    document.getElementById('rowCount').textContent = '0 results';
+    return;
+  }
+  document.getElementById('noResults').style.display = 'none';
+
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td class="domain-cell" title="${r.domain}">${r.domain}</td>
+      <td>${statusBadge(r.status)}</td>
+      <td>
+        ${r.google === 'Yes'
+          ? '<span class="google-yes">✔ Yes</span>'
+          : '<span class="google-no">— No</span>'}
+      </td>
+      <td class="code-cell">${r.status_code ?? '—'}</td>
+      <td class="err-cell" title="${r.error}">${r.error || '—'}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('rowCount').textContent =
+    `Showing ${rows.length} of ${allResults.length} results`;
+}
+
+function statusBadge(s) {
+  if (s === 'Success')   return `<span class="badge badge-success">✓ Success</span>`;
+  if (s === 'Not Found') return `<span class="badge badge-404">404 Not Found</span>`;
+  if (s === 'Failed')    return `<span class="badge badge-fail">✗ Failed</span>`;
+  return `<span class="badge badge-other">${s}</span>`;
+}
+
+// ── Export ───────────────────────────────────────────────────────
+function exportFile(type) {
+  if (!currentJobId) { toast('No results to export.', 'err'); return; }
+  const url = type === 'csv'
+    ? `/api/export/${currentJobId}`
+    : `/api/export_excel/${currentJobId}`;
+  window.open(url, '_blank');
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
+function clearAll() {
+  selectedFile = null;
+  document.getElementById('fileInput').value   = '';
+  document.getElementById('fileName').style.display = 'none';
+  document.getElementById('domainsInput').value = '';
+  allResults = [];
+  document.getElementById('progressSection').style.display = 'none';
+  document.getElementById('statsSection').style.display    = 'none';
+  document.getElementById('resultsSection').style.display  = 'none';
+  if (pollTimer) clearInterval(pollTimer);
+}
+
+let toastTimer;
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type} show`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+}
+</script>
+</body>
+</html>
