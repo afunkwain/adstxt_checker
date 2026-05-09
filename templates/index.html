@@ -299,6 +299,22 @@ textarea::placeholder { color: var(--muted); }
 /* ── Stats Row ──────────────────────────────────────────────────── */
 #statsSection { display: none; margin-bottom: 20px; }
 
+.run-summary {
+  display: none;
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-summary b {
+  color: var(--text);
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -591,6 +607,8 @@ td.domain-cell {
     </div>
   </div>
 
+  <div class="run-summary" id="runSummary"></div>
+
   <!-- Results Table -->
   <div id="resultsSection">
     <div class="results-panel">
@@ -645,6 +663,7 @@ let sortAsc     = true;
 let currentJobId = null;
 let pollTimer   = null;
 let selectedFile = null;
+let runMeta = null;
 
 // ── File drag & drop ─────────────────────────────────────────────
 const dropZone  = document.getElementById('dropZone');
@@ -683,6 +702,7 @@ async function startScan() {
   document.getElementById('runBtn').disabled = true;
   document.getElementById('progressSection').style.display = 'block';
   document.getElementById('statsSection').style.display    = 'none';
+  document.getElementById('runSummary').style.display      = 'none';
   document.getElementById('resultsSection').style.display  = 'none';
   setProgress(0, 0, 0);
 
@@ -709,6 +729,21 @@ async function startScan() {
   if (data.error) { toast(data.error, 'err'); document.getElementById('runBtn').disabled = false; return; }
 
   currentJobId = data.job_id;
+  runMeta = {
+    submitted: data.submitted ?? data.total ?? 0,
+    unique: data.unique ?? data.total ?? 0,
+    duplicatesRemoved: data.duplicates_removed ?? 0,
+    invalidSkipped: data.invalid_skipped ?? 0
+  };
+
+  const summaryBits = [
+    `${runMeta.submitted} submitted`,
+    `${runMeta.unique} unique`
+  ];
+  if (runMeta.duplicatesRemoved > 0) summaryBits.push(`${runMeta.duplicatesRemoved} duplicates removed`);
+  if (runMeta.invalidSkipped > 0) summaryBits.push(`${runMeta.invalidSkipped} invalid skipped`);
+  toast(summaryBits.join(' • '), 'ok');
+
   startPolling(data.total);
 }
 
@@ -769,6 +804,24 @@ function showResults(elapsed) {
 
   document.getElementById('statsSection').style.display   = 'grid';
   document.getElementById('resultsSection').style.display = 'block';
+
+  const summaryEl = document.getElementById('runSummary');
+  if (runMeta) {
+    const detailParts = [
+      `<b>${runMeta.submitted}</b> submitted`,
+      `<b>${runMeta.unique}</b> unique scanned`
+    ];
+    if (runMeta.duplicatesRemoved > 0) {
+      detailParts.push(`<b>${runMeta.duplicatesRemoved}</b> duplicates removed`);
+    }
+    if (runMeta.invalidSkipped > 0) {
+      detailParts.push(`<b>${runMeta.invalidSkipped}</b> invalid entries skipped`);
+    }
+    summaryEl.innerHTML = `Input summary: ${detailParts.join(' • ')}`;
+    summaryEl.style.display = 'block';
+  } else {
+    summaryEl.style.display = 'none';
+  }
 
   currentFilter = 'all';
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -861,8 +914,10 @@ function clearAll() {
   document.getElementById('fileName').style.display = 'none';
   document.getElementById('domainsInput').value = '';
   allResults = [];
+  runMeta = null;
   document.getElementById('progressSection').style.display = 'none';
   document.getElementById('statsSection').style.display    = 'none';
+  document.getElementById('runSummary').style.display      = 'none';
   document.getElementById('resultsSection').style.display  = 'none';
   if (pollTimer) clearInterval(pollTimer);
 }

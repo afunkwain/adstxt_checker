@@ -45,6 +45,17 @@ def clean_domain(raw: str) -> str:
     return raw.lower()
 
 
+def dedupe_domains(domains: list) -> list:
+    """Deduplicate domains while preserving original order."""
+    seen = set()
+    unique = []
+    for d in domains:
+        if d and d not in seen:
+            seen.add(d)
+            unique.append(d)
+    return unique
+
+
 def check_domain(domain: str) -> dict:
     """Fetch /ads.txt for a domain and look for google.com."""
     result = {
@@ -113,34 +124,52 @@ def run_job(job_id: str, domains: list):
     job["elapsed"]  = round(time.time() - job["started"], 1)
 
 
-def parse_domains_from_excel(file_bytes: bytes) -> list:
-    """Extract all non-empty cell values from an xlsx/xls file."""
+def parse_domains_from_excel(file_bytes: bytes) -> dict:
+    """Extract domains and return input summary for an xlsx/xls file."""
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-    domains = []
+    raw_values = []
+    normalized_domains = []
+
     for ws in wb.worksheets:
         for row in ws.iter_rows(values_only=True):
             for cell in row:
                 if cell and str(cell).strip():
-                    domains.append(clean_domain(str(cell)))
-    # deduplicate while preserving order
-    seen = set()
-    unique = []
-    for d in domains:
-        if d and d not in seen:
-            seen.add(d)
-            unique.append(d)
-    return unique
+                    raw = str(cell).strip()
+                    raw_values.append(raw)
+                    cleaned = clean_domain(raw)
+                    if cleaned:
+                        normalized_domains.append(cleaned)
+
+    unique = dedupe_domains(normalized_domains)
+    return {
+        "domains": unique,
+        "submitted": len(raw_values),
+        "normalized": len(normalized_domains),
+        "unique": len(unique),
+    }
 
 
-def parse_domains_from_text(text: str) -> list:
-    lines = text.strip().splitlines()
-    seen, unique = set(), []
+def parse_domains_from_text(text: str) -> dict:
+    lines = text.splitlines()
+    raw_values = []
+    normalized_domains = []
+
     for line in lines:
-        d = clean_domain(line)
-        if d and d not in seen:
-            seen.add(d)
-            unique.append(d)
-    return unique
+        if not line.strip():
+            continue
+        raw = line.strip()
+        raw_values.append(raw)
+        cleaned = clean_domain(raw)
+        if cleaned:
+            normalized_domains.append(cleaned)
+
+    unique = dedupe_domains(normalized_domains)
+    return {
+        "domains": unique,
+        "submitted": len(raw_values),
+        "normalized": len(normalized_domains),
+        "unique": len(unique),
+    }
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -153,12 +182,17 @@ def index():
 @app.route("/api/check", methods=["POST"])
 def start_check():
     domains = []
+    submitted_count = 0
+    normalized_count = 0
 
     # --- Excel upload ---
     if "file" in request.files:
         f = request.files["file"]
         try:
-            domains = parse_domains_from_excel(f.read())
+            parsed = parse_domains_from_excel(f.read())
+            domains = parsed["domains"]
+            submitted_count = parsed["submitted"]
+            normalized_count = parsed["normalized"]
         except Exception as e:
             return jsonify({"error": f"Could not read Excel file: {e}"}), 400
 
@@ -166,7 +200,10 @@ def start_check():
     elif request.is_json:
         data = request.get_json()
         raw  = data.get("domains", "")
-        domains = parse_domains_from_text(raw)
+        parsed = parse_domains_from_text(raw)
+        domains = parsed["domains"]
+        submitted_count = parsed["submitted"]
+        normalized_count = parsed["normalized"]
 
     if not domains:
         return jsonify({"error": "No valid domains found."}), 400
@@ -174,13 +211,37 @@ def start_check():
     if len(domains) > 10_000:
         return jsonify({"error": "Max 10 000 domains per run."}), 400
 
+    unique_count = len(domains)
+    duplicates_removed = max(normalized_count - unique_count, 0)
+    invalid_skipped = max(submitted_count - normalized_count, 0)
+
     job_id = f"job_{int(time.time()*1000)}"
-    jobs[job_id] = {"finished": False, "total": 0, "done": 0, "results": []}
+    jobs[job_id] = {
+        "finished": False,
+        "total": 0,
+        "done": 0,
+        "results": [],
+        "summary": {
+            "job_id": job_id,
+            "run_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "submitted": submitted_count,
+            "unique": unique_count,
+            "duplicates_removed": duplicates_removed,
+            "invalid_skipped": invalid_skipped,
+        },
+    }
 
     thread = threading.Thread(target=run_job, args=(job_id, domains), daemon=True)
     thread.start()
 
-    return jsonify({"job_id": job_id, "total": len(domains)})
+    return jsonify({
+        "job_id": job_id,
+        "total": unique_count,
+        "submitted": submitted_count,
+        "unique": unique_count,
+        "duplicates_removed": duplicates_removed,
+        "invalid_skipped": invalid_skipped,
+    })
 
 
 @app.route("/api/status/<job_id>")
@@ -203,7 +264,17 @@ def export_csv(job_id):
     if not job or not job["finished"]:
         return jsonify({"error": "Job not ready"}), 404
 
+    summary = job.get("summary", {})
+
     output = io.StringIO()
+    output.write("Run Summary\n")
+    output.write(f"Job ID,{summary.get('job_id', '')}\n")
+    output.write(f"Run Timestamp,{summary.get('run_timestamp', '')}\n")
+    output.write(f"Submitted,{summary.get('submitted', '')}\n")
+    output.write(f"Unique Scanned,{summary.get('unique', '')}\n")
+    output.write(f"Duplicates Removed,{summary.get('duplicates_removed', '')}\n")
+    output.write(f"Invalid Skipped,{summary.get('invalid_skipped', '')}\n\n")
+
     writer = csv.DictWriter(
         output,
         fieldnames=["domain", "status", "google", "status_code", "error"],
@@ -231,13 +302,33 @@ def export_excel(job_id):
     ws = wb.active
     ws.title = "AdsTxt Results"
 
+    summary = job.get("summary", {})
+    ws.append(["Run Summary", "Value"])
+    ws.append(["Job ID", summary.get("job_id", "")])
+    ws.append(["Run Timestamp", summary.get("run_timestamp", "")])
+    ws.append(["Submitted", summary.get("submitted", "")])
+    ws.append(["Unique Scanned", summary.get("unique", "")])
+    ws.append(["Duplicates Removed", summary.get("duplicates_removed", "")])
+    ws.append(["Invalid Skipped", summary.get("invalid_skipped", "")])
+    ws.append([])
+
     headers = ["Domain", "Status", "Google.com Present", "HTTP Code", "Error"]
     ws.append(headers)
 
-    # Style header row
+    # Style summary title row
     from openpyxl.styles import Font, PatternFill, Alignment
     header_fill = PatternFill("solid", fgColor="1A1A2E")
     for col, cell in enumerate(ws[1], 1):
+        cell.font      = Font(bold=True, color="00E5A0")
+        cell.fill      = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    ws["A1"].alignment = Alignment(horizontal="left")
+    ws["B1"].alignment = Alignment(horizontal="center")
+
+    # Style table header row (after summary section)
+    table_header_row = 9
+    for cell in ws[table_header_row]:
         cell.font      = Font(bold=True, color="00E5A0")
         cell.fill      = header_fill
         cell.alignment = Alignment(horizontal="center")
