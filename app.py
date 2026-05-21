@@ -179,41 +179,107 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/api/check", methods=["POST"])
-def start_check():
-    domains = []
+def _extract_domains_from_request():
+    """Parse domains from uploaded Excel or JSON body. Returns (domains, counts) or error."""
     submitted_count = 0
     normalized_count = 0
 
-    # --- Excel upload ---
     if "file" in request.files:
         f = request.files["file"]
         try:
             parsed = parse_domains_from_excel(f.read())
-            domains = parsed["domains"]
-            submitted_count = parsed["submitted"]
-            normalized_count = parsed["normalized"]
         except Exception as e:
-            return jsonify({"error": f"Could not read Excel file: {e}"}), 400
+            return None, (f"Could not read Excel file: {e}", 400)
+        domains = parsed["domains"]
+        submitted_count = parsed["submitted"]
+        normalized_count = parsed["normalized"]
 
-    # --- Plain text / paste ---
     elif request.is_json:
-        data = request.get_json()
-        raw  = data.get("domains", "")
+        data = request.get_json() or {}
+        raw = data.get("domains", "")
         parsed = parse_domains_from_text(raw)
         domains = parsed["domains"]
         submitted_count = parsed["submitted"]
         normalized_count = parsed["normalized"]
 
+    else:
+        return None, ("Upload a file or send domains as JSON.", 400)
+
     if not domains:
-        return jsonify({"error": "No valid domains found."}), 400
+        return None, ("No valid domains found.", 400)
 
     if len(domains) > 10_000:
-        return jsonify({"error": "Max 10 000 domains per run."}), 400
+        return None, ("Max 10 000 domains per run.", 400)
 
     unique_count = len(domains)
     duplicates_removed = max(normalized_count - unique_count, 0)
     invalid_skipped = max(submitted_count - normalized_count, 0)
+
+    return {
+        "domains": domains,
+        "submitted": submitted_count,
+        "unique": unique_count,
+        "duplicates_removed": duplicates_removed,
+        "invalid_skipped": invalid_skipped,
+    }, None
+
+
+@app.route("/api/parse", methods=["POST"])
+def parse_only():
+    """Parse domains from upload or text without starting a scan."""
+    payload, err = _extract_domains_from_request()
+    if err:
+        return jsonify({"error": err[0]}), err[1]
+    return jsonify(payload)
+
+
+@app.route("/api/check_batch", methods=["POST"])
+def check_batch():
+    """Check a batch of domains synchronously (works on serverless)."""
+    if not request.is_json:
+        return jsonify({"error": "JSON body required."}), 400
+
+    data = request.get_json() or {}
+    domains = data.get("domains") or []
+    if not isinstance(domains, list):
+        return jsonify({"error": "domains must be a list."}), 400
+
+    domains = [clean_domain(str(d)) for d in domains if str(d).strip()]
+    domains = dedupe_domains(domains)
+
+    if not domains:
+        return jsonify({"error": "No valid domains in batch."}), 400
+
+    if len(domains) > 100:
+        return jsonify({"error": "Max 100 domains per batch."}), 400
+
+    try:
+        workers = int(data.get("workers", MAX_WORKERS))
+    except (TypeError, ValueError):
+        workers = MAX_WORKERS
+    workers = min(max(workers, 1), 50)
+
+    results = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_map = {pool.submit(check_domain, d): d for d in domains}
+        for future in as_completed(future_map):
+            results.append(future.result())
+
+    results.sort(key=lambda r: r["domain"])
+    return jsonify({"results": results})
+
+
+@app.route("/api/check", methods=["POST"])
+def start_check():
+    payload, err = _extract_domains_from_request()
+    if err:
+        return jsonify({"error": err[0]}), err[1]
+
+    domains = payload["domains"]
+    submitted_count = payload["submitted"]
+    unique_count = payload["unique"]
+    duplicates_removed = payload["duplicates_removed"]
+    invalid_skipped = payload["invalid_skipped"]
 
     job_id = f"job_{int(time.time()*1000)}"
     jobs[job_id] = {
@@ -258,14 +324,7 @@ def job_status(job_id):
     })
 
 
-@app.route("/api/export/<job_id>")
-def export_csv(job_id):
-    job = jobs.get(job_id)
-    if not job or not job["finished"]:
-        return jsonify({"error": "Job not ready"}), 404
-
-    summary = job.get("summary", {})
-
+def _build_csv_bytes(results: list, summary: dict) -> bytes:
     output = io.StringIO()
     output.write("Run Summary\n")
     output.write(f"Job ID,{summary.get('job_id', '')}\n")
@@ -281,28 +340,18 @@ def export_csv(job_id):
         extrasaction="ignore",
     )
     writer.writeheader()
-    writer.writerows(job["results"])
-
+    writer.writerows(results)
     output.seek(0)
-    return send_file(
-        io.BytesIO(output.getvalue().encode()),
-        mimetype="text/csv",
-        as_attachment=True,
-        download_name="adstxt_results.csv",
-    )
+    return output.getvalue().encode()
 
 
-@app.route("/api/export_excel/<job_id>")
-def export_excel(job_id):
-    job = jobs.get(job_id)
-    if not job or not job["finished"]:
-        return jsonify({"error": "Job not ready"}), 404
+def _build_excel_bytes(results: list, summary: dict) -> bytes:
+    from openpyxl.styles import Font, PatternFill, Alignment
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "AdsTxt Results"
 
-    summary = job.get("summary", {})
     ws.append(["Run Summary", "Value"])
     ws.append(["Job ID", summary.get("job_id", "")])
     ws.append(["Run Timestamp", summary.get("run_timestamp", "")])
@@ -315,28 +364,25 @@ def export_excel(job_id):
     headers = ["Domain", "Status", "Google.com Present", "HTTP Code", "Error"]
     ws.append(headers)
 
-    # Style summary title row
-    from openpyxl.styles import Font, PatternFill, Alignment
     header_fill = PatternFill("solid", fgColor="1A1A2E")
-    for col, cell in enumerate(ws[1], 1):
-        cell.font      = Font(bold=True, color="00E5A0")
-        cell.fill      = header_fill
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="00E5A0")
+        cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center")
 
     ws["A1"].alignment = Alignment(horizontal="left")
     ws["B1"].alignment = Alignment(horizontal="center")
 
-    # Style table header row (after summary section)
     table_header_row = 9
     for cell in ws[table_header_row]:
-        cell.font      = Font(bold=True, color="00E5A0")
-        cell.fill      = header_fill
+        cell.font = Font(bold=True, color="00E5A0")
+        cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center")
 
     green_fill = PatternFill("solid", fgColor="D4EDDA")
-    red_fill   = PatternFill("solid", fgColor="F8D7DA")
+    red_fill = PatternFill("solid", fgColor="F8D7DA")
 
-    for row in job["results"]:
+    for row in results:
         ws.append([
             row["domain"],
             row["status"],
@@ -350,7 +396,6 @@ def export_excel(job_id):
         else:
             ws.cell(last_row, 3).fill = red_fill
 
-    # Auto-width columns
     for col in ws.columns:
         max_len = max((len(str(c.value or "")) for c in col), default=10)
         ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 60)
@@ -358,9 +403,64 @@ def export_excel(job_id):
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
+    return buf.getvalue()
+
+
+@app.route("/api/export", methods=["POST"])
+def export_results_post():
+    """Export scan results sent in the request body (stateless)."""
+    if not request.is_json:
+        return jsonify({"error": "JSON body required."}), 400
+
+    data = request.get_json() or {}
+    results = data.get("results") or []
+    summary = data.get("summary") or {}
+    fmt = (data.get("format") or "csv").lower()
+
+    if not results:
+        return jsonify({"error": "No results to export."}), 400
+
+    if fmt == "excel":
+        return send_file(
+            io.BytesIO(_build_excel_bytes(results, summary)),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="adstxt_results.xlsx",
+        )
 
     return send_file(
-        buf,
+        io.BytesIO(_build_csv_bytes(results, summary)),
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name="adstxt_results.csv",
+    )
+
+
+@app.route("/api/export/<job_id>")
+def export_csv(job_id):
+    job = jobs.get(job_id)
+    if not job or not job["finished"]:
+        return jsonify({"error": "Job not ready"}), 404
+
+    summary = job.get("summary", {})
+
+    return send_file(
+        io.BytesIO(_build_csv_bytes(job["results"], summary)),
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name="adstxt_results.csv",
+    )
+
+
+@app.route("/api/export_excel/<job_id>")
+def export_excel(job_id):
+    job = jobs.get(job_id)
+    if not job or not job["finished"]:
+        return jsonify({"error": "Job not ready"}), 404
+
+    summary = job.get("summary", {})
+    return send_file(
+        io.BytesIO(_build_excel_bytes(job["results"], summary)),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
         download_name="adstxt_results.xlsx",

@@ -1,4 +1,11 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
+
+# Local scan data and output
+*.xlsx
+*.xls
+scan_progress.log
+adstxt_results.csv

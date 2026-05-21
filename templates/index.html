@@ -660,10 +660,9 @@ let allResults  = [];
 let currentFilter = 'all';
 let sortCol     = 'domain';
 let sortAsc     = true;
-let currentJobId = null;
-let pollTimer   = null;
 let selectedFile = null;
 let runMeta = null;
+let scanAbort = false;
 
 // ── File drag & drop ─────────────────────────────────────────────
 const dropZone  = document.getElementById('dropZone');
@@ -697,7 +696,7 @@ async function startScan() {
     return;
   }
 
-  // Reset UI
+  scanAbort = false;
   allResults = [];
   document.getElementById('runBtn').disabled = true;
   document.getElementById('progressSection').style.display = 'block';
@@ -706,34 +705,63 @@ async function startScan() {
   document.getElementById('resultsSection').style.display  = 'none';
   setProgress(0, 0, 0);
 
-  let response;
+  let parseResponse;
   try {
-    if (selectedFile) {
-      const fd = new FormData();
-      fd.append('file', selectedFile);
-      response = await fetch('/api/check', { method: 'POST', body: fd });
-    } else {
-      response = await fetch('/api/check', {
+    // Pasted domains take priority over a previously uploaded file
+    if (textarea) {
+      parseResponse = await fetch('/api/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domains: textarea })
       });
+    } else if (selectedFile) {
+      const fd = new FormData();
+      fd.append('file', selectedFile);
+      parseResponse = await fetch('/api/parse', { method: 'POST', body: fd });
     }
   } catch (e) {
     toast('Cannot connect to server. Is app.py running?', 'err');
     document.getElementById('runBtn').disabled = false;
+    document.getElementById('progressSection').style.display = 'none';
     return;
   }
 
-  const data = await response.json();
-  if (data.error) { toast(data.error, 'err'); document.getElementById('runBtn').disabled = false; return; }
+  let parsed;
+  try {
+    parsed = await parseResponse.json();
+  } catch (e) {
+    toast('Server returned an invalid response. Is app.py running?', 'err');
+    document.getElementById('runBtn').disabled = false;
+    document.getElementById('progressSection').style.display = 'none';
+    return;
+  }
 
-  currentJobId = data.job_id;
+  if (!parseResponse.ok || parsed.error) {
+    toast(parsed.error || 'Could not parse domains.', 'err');
+    document.getElementById('runBtn').disabled = false;
+    document.getElementById('progressSection').style.display = 'none';
+    return;
+  }
+
+  const domains = parsed.domains || [];
+  const total = domains.length;
+  if (!total) {
+    toast('No valid domains found.', 'err');
+    document.getElementById('runBtn').disabled = false;
+    document.getElementById('progressSection').style.display = 'none';
+    return;
+  }
+
+  const workers = parseInt(document.getElementById('speedSelect').value, 10) || 20;
+  const batchSize = Math.min(workers, 100);
+
   runMeta = {
-    submitted: data.submitted ?? data.total ?? 0,
-    unique: data.unique ?? data.total ?? 0,
-    duplicatesRemoved: data.duplicates_removed ?? 0,
-    invalidSkipped: data.invalid_skipped ?? 0
+    job_id: `run_${Date.now()}`,
+    run_timestamp: new Date().toLocaleString(),
+    submitted: parsed.submitted ?? total,
+    unique: parsed.unique ?? total,
+    duplicatesRemoved: parsed.duplicates_removed ?? 0,
+    invalidSkipped: parsed.invalid_skipped ?? 0
   };
 
   const summaryBits = [
@@ -744,41 +772,68 @@ async function startScan() {
   if (runMeta.invalidSkipped > 0) summaryBits.push(`${runMeta.invalidSkipped} invalid skipped`);
   toast(summaryBits.join(' • '), 'ok');
 
-  startPolling(data.total);
-}
+  const scanStart = Date.now();
+  setProgress(0, total, 0);
 
-// ── Polling ──────────────────────────────────────────────────────
-let pollStart;
+  for (let i = 0; i < domains.length; i += batchSize) {
+    if (scanAbort) break;
 
-function startPolling(total) {
-  pollStart = Date.now();
-  pollTimer = setInterval(async () => {
+    const batch = domains.slice(i, i + batchSize);
+    let batchResponse;
     try {
-      const res  = await fetch(`/api/status/${currentJobId}`);
-      const data = await res.json();
+      batchResponse = await fetch('/api/check_batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains: batch, workers })
+      });
+    } catch (e) {
+      toast('Lost connection while scanning. Partial results are shown.', 'err');
+      break;
+    }
 
-      setProgress(data.done, data.total, data.elapsed);
+    let batchData;
+    try {
+      batchData = await batchResponse.json();
+    } catch (e) {
+      toast('Server returned an invalid response during scan.', 'err');
+      break;
+    }
 
-      if (data.finished) {
-        clearInterval(pollTimer);
-        allResults = data.results;
-        showResults(data.elapsed);
-      }
-    } catch(e) { /* retry next tick */ }
-  }, 700);
+    if (!batchResponse.ok || batchData.error) {
+      toast(batchData.error || 'Scan batch failed.', 'err');
+      break;
+    }
+
+    allResults.push(...(batchData.results || []));
+    const elapsed = (Date.now() - scanStart) / 1000;
+    setProgress(allResults.length, total, elapsed);
+  }
+
+  if (allResults.length) {
+    showResults(Math.round((Date.now() - scanStart) / 100) / 10);
+  } else {
+    document.getElementById('progressSection').style.display = 'none';
+    document.getElementById('runBtn').disabled = false;
+  }
 }
 
 function setProgress(done, total, elapsed) {
+  done = Number(done) || 0;
+  total = Number(total) || 0;
   const pct = total ? Math.round((done / total) * 100) : 0;
   document.getElementById('progFill').style.width = pct + '%';
   document.getElementById('progPct').textContent   = pct + '%';
   document.getElementById('progCount').textContent = `${done} / ${total} domains`;
 
-  if (done > 0 && elapsed) {
+  if (done > 0 && elapsed > 0 && done < total) {
     const rate  = done / elapsed;
     const left  = (total - done) / rate;
     document.getElementById('progEta').textContent =
       left < 1 ? 'Almost done…' : `~${Math.ceil(left)}s remaining`;
+  } else if (done >= total && total > 0) {
+    document.getElementById('progEta').textContent = 'Complete';
+  } else {
+    document.getElementById('progEta').textContent = 'Estimating…';
   }
 }
 
@@ -899,27 +954,63 @@ function statusBadge(s) {
 }
 
 // ── Export ───────────────────────────────────────────────────────
-function exportFile(type) {
-  if (!currentJobId) { toast('No results to export.', 'err'); return; }
-  const url = type === 'csv'
-    ? `/api/export/${currentJobId}`
-    : `/api/export_excel/${currentJobId}`;
-  window.open(url, '_blank');
+async function exportFile(type) {
+  if (!allResults.length) { toast('No results to export.', 'err'); return; }
+
+  const summary = runMeta ? {
+    job_id: runMeta.job_id,
+    run_timestamp: runMeta.run_timestamp,
+    submitted: runMeta.submitted,
+    unique: runMeta.unique,
+    duplicates_removed: runMeta.duplicatesRemoved,
+    invalid_skipped: runMeta.invalidSkipped
+  } : {};
+
+  try {
+    const res = await fetch('/api/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        format: type === 'excel' ? 'excel' : 'csv',
+        results: allResults,
+        summary
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast(err.error || 'Export failed.', 'err');
+      return;
+    }
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = type === 'excel' ? 'adstxt_results.xlsx' : 'adstxt_results.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    toast('Export failed. Is the server running?', 'err');
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
 function clearAll() {
+  scanAbort = true;
   selectedFile = null;
   document.getElementById('fileInput').value   = '';
   document.getElementById('fileName').style.display = 'none';
   document.getElementById('domainsInput').value = '';
   allResults = [];
   runMeta = null;
+  document.getElementById('runBtn').disabled = false;
   document.getElementById('progressSection').style.display = 'none';
   document.getElementById('statsSection').style.display    = 'none';
   document.getElementById('runSummary').style.display      = 'none';
   document.getElementById('resultsSection').style.display  = 'none';
-  if (pollTimer) clearInterval(pollTimer);
 }
 
 let toastTimer;
