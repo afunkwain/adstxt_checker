@@ -9,3 +9,6 @@ __pycache__/
 *.xls
 scan_progress.log
 adstxt_results.csv
+
+# Local working notes
+CLAUDE.md

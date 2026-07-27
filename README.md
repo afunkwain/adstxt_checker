@@ -1,6 +1,11 @@
-# 📡 AdsTxt Radar — Google.com Domain Scanner
+# 📡 AdsTxt Radar — AdSense-Only Domain Scanner
 
-Check hundreds or thousands of domains for `google.com` in their `ads.txt` files.
+Check hundreds or thousands of domains and flag the ones whose `ads.txt` lists
+`google.com` as its **only** demand partner — i.e. publishers monetizing with
+AdSense alone, with no other ad networks alongside it.
+
+A domain that lists `google.com` *plus* other partners (Rubicon, AppNexus,
+Amazon, etc.) is **not** flagged.
 
 ---
 
@@ -42,7 +47,9 @@ Go to: **http://localhost:5000**
 - ✅ Handles hundreds / thousands of domains (up to 10,000 per run)
 - ✅ Concurrent requests (up to 50 parallel — configurable)
 - ✅ Tries HTTPS first, falls back to HTTP
-- ✅ Case-insensitive match on `google.com`
+- ✅ Parses `ads.txt` properly — ignores comments, blank lines and variable
+  declarations (`CONTACT=`, `OWNERDOMAIN=`, …) when deciding
+- ✅ Case-insensitive exact match on the `google.com` domain field
 - ✅ Live progress bar with ETA
 - ✅ Filter & search results in the browser
 - ✅ Export to CSV or styled Excel

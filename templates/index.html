@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>AdsTxt Radar — Google.com Scanner</title>
+<title>AdsTxt Radar — AdSense-Only Scanner</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Clash+Display:wght@400;600;700&family=Cabinet+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -513,10 +513,11 @@ td.domain-cell {
       <div class="logo-icon">📡</div>
       <span class="logo-tag">AdsTxt Radar v1.0</span>
     </div>
-    <h1>Check who's running<br><em>Google Ads</em> on your domains</h1>
+    <h1>Find domains running<br><em>only Google Ads</em> and nothing else</h1>
     <p class="subtitle">
       Upload an Excel file or paste domains below. The tool fetches each domain's
-      <code>ads.txt</code> and checks for <code>google.com</code> — fast, bulk, exportable.
+      <code>ads.txt</code> and flags the ones where <code>google.com</code> is the
+      only demand partner listed — fast, bulk, exportable.
     </p>
   </header>
 
@@ -585,7 +586,7 @@ td.domain-cell {
       </div>
       <div class="stat-card stat-green">
         <div class="stat-num" id="statGoogle">0</div>
-        <div class="stat-lbl">Google.com Found</div>
+        <div class="stat-lbl">AdSense-Only Domains</div>
         <div class="stat-sub" id="statGooglePct"></div>
       </div>
       <div class="stat-card stat-gray">
@@ -616,8 +617,8 @@ td.domain-cell {
       <div class="table-toolbar">
         <div class="filter-tabs">
           <button class="tab active" onclick="setFilter('all', this)">All</button>
-          <button class="tab" onclick="setFilter('yes', this)">✅ Google Found</button>
-          <button class="tab" onclick="setFilter('no', this)">❌ Not Found</button>
+          <button class="tab" onclick="setFilter('yes', this)">✅ AdSense Only</button>
+          <button class="tab" onclick="setFilter('no', this)">❌ Not AdSense Only</button>
           <button class="tab" onclick="setFilter('success', this)">Loaded</button>
           <button class="tab" onclick="setFilter('failed', this)">Failed</button>
         </div>
@@ -635,7 +636,7 @@ td.domain-cell {
             <tr>
               <th onclick="sortBy('domain')">Domain <span class="sort-icon">⇅</span></th>
               <th onclick="sortBy('status')">Status <span class="sort-icon">⇅</span></th>
-              <th onclick="sortBy('google')">Google.com <span class="sort-icon">⇅</span></th>
+              <th onclick="sortBy('google')">AdSense Only <span class="sort-icon">⇅</span></th>
               <th onclick="sortBy('status_code')">HTTP Code <span class="sort-icon">⇅</span></th>
               <th>Error</th>
             </tr>
