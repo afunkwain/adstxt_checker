@@ -44,12 +44,22 @@ jobs = {}
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def clean_domain(raw: str) -> str:
-    """Strip protocol, paths, whitespace — keep bare domain."""
+    """
+    Strip protocol, paths, whitespace — keep bare domain.
+
+    Returns "" for anything that cannot be a hostname. Spreadsheet and CSV
+    uploads treat every cell as a candidate, so this is what drops header
+    labels ("domain", "notes") and stray prose instead of scanning them.
+    """
     raw = raw.strip()
     raw = re.sub(r'^https?://', '', raw, flags=re.IGNORECASE)
     raw = raw.split('/')[0]          # drop any path
     raw = raw.split('?')[0]          # drop query string
-    return raw.lower()
+    raw = raw.strip().lower()
+
+    if '.' not in raw or any(c.isspace() for c in raw):
+        return ""
+    return raw
 
 
 def dedupe_domains(domains: list) -> list:
@@ -217,8 +227,58 @@ def run_job(job_id: str, domains: list):
     job["elapsed"]  = round(time.time() - job["started"], 1)
 
 
+def _summarize(raw_values: list, normalized_domains: list) -> dict:
+    unique = dedupe_domains(normalized_domains)
+    return {
+        "domains": unique,
+        "submitted": len(raw_values),
+        "normalized": len(normalized_domains),
+        "unique": len(unique),
+    }
+
+
+def parse_domains_from_csv(file_bytes: bytes) -> dict:
+    """Extract domains from a CSV/TSV upload, treating every cell as a candidate."""
+    # utf-8-sig strips the BOM Excel writes, which would otherwise corrupt the
+    # first domain (﻿fontyukle.net).
+    text = file_bytes.decode("utf-8-sig", errors="replace")
+    raw_values = []
+    normalized_domains = []
+
+    for row in csv.reader(io.StringIO(text)):
+        for cell in row:
+            if cell and cell.strip():
+                raw = cell.strip()
+                raw_values.append(raw)
+                cleaned = clean_domain(raw)
+                if cleaned:
+                    normalized_domains.append(cleaned)
+
+    return _summarize(raw_values, normalized_domains)
+
+
+def parse_domains_from_upload(filename: str, file_bytes: bytes) -> dict:
+    """
+    Route an upload to the right parser.
+
+    An .xlsx file is a zip archive and starts with "PK"; a CSV is plain text.
+    Sniffing the bytes rather than trusting the extension also handles files
+    saved with the wrong suffix.
+    """
+    if file_bytes.startswith(b"PK"):
+        return parse_domains_from_excel(file_bytes)
+
+    # OLE2 compound document — a genuine legacy .xls, which openpyxl cannot read
+    if file_bytes.startswith(b"\xd0\xcf\x11\xe0"):
+        raise ValueError(
+            "Old .xls format is not supported - re-save as .xlsx or .csv"
+        )
+
+    return parse_domains_from_csv(file_bytes)
+
+
 def parse_domains_from_excel(file_bytes: bytes) -> dict:
-    """Extract domains and return input summary for an xlsx/xls file."""
+    """Extract domains and return input summary for an xlsx file."""
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     raw_values = []
     normalized_domains = []
@@ -280,9 +340,11 @@ def _extract_domains_from_request():
     if "file" in request.files:
         f = request.files["file"]
         try:
-            parsed = parse_domains_from_excel(f.read())
+            parsed = parse_domains_from_upload(f.filename, f.read())
+        except ValueError as e:
+            return None, (str(e), 400)
         except Exception as e:
-            return None, (f"Could not read Excel file: {e}", 400)
+            return None, (f"Could not read file: {e}", 400)
         domains = parsed["domains"]
         submitted_count = parsed["submitted"]
         normalized_count = parsed["normalized"]
