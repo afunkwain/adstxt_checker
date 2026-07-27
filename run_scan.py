@@ -43,7 +43,7 @@ def main():
         print(f"  {done}/{total} ({pct}%) — ~{eta}s remaining", flush=True)
 
     elapsed = round(time.time() - started, 1)
-    google_yes = sum(1 for r in results if r["google"] == "Yes")
+    adsense_only = sum(1 for r in results if r["google"] == "Yes")
     success = sum(1 for r in results if r["status"] == "Success")
 
     with OUTPUT.open("w", newline="", encoding="utf-8") as f:
@@ -55,7 +55,7 @@ def main():
         w.writerows(results)
 
     print(f"\nDone in {elapsed}s")
-    print(f"  Google.com found: {google_yes}")
+    print(f"  AdSense-only:     {adsense_only}")
     print(f"  Ads.txt loaded:   {success}")
     print(f"  Saved to:         {OUTPUT}")
 

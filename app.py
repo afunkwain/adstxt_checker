@@ -1,7 +1,8 @@
 """
 AdsTxt Checker — Python Backend
 ================================
-Flask server that checks domains for google.com in their ads.txt files.
+Flask server that checks domains for ads.txt files listing google.com as their
+only demand partner (i.e. AdSense-only publishers).
 
 HOW TO RUN:
   1. pip install flask flask-cors requests openpyxl
@@ -17,6 +18,8 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from urllib.parse import urlparse
+
 import requests
 import openpyxl
 from flask import Flask, jsonify, render_template, request, send_file
@@ -28,7 +31,11 @@ CORS(app)
 # ── Config ─────────────────────────────────────────────────────────────────────
 TIMEOUT        = 8          # seconds per request
 MAX_WORKERS    = 30         # concurrent threads
-GOOGLE_PATTERN = re.compile(r'google\.com', re.IGNORECASE)
+
+# ads.txt variable declarations (CONTACT=, OWNERDOMAIN=, SUBDOMAIN=, …) are
+# metadata, not demand entries — they don't count toward the "sole entry" test.
+VARIABLE_LINE = re.compile(r'^[A-Za-z]+\s*=')
+GOOGLE_DOMAIN = "google.com"
 
 # In-memory job store  {job_id: {...}}
 jobs = {}
@@ -37,12 +44,22 @@ jobs = {}
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def clean_domain(raw: str) -> str:
-    """Strip protocol, paths, whitespace — keep bare domain."""
+    """
+    Strip protocol, paths, whitespace — keep bare domain.
+
+    Returns "" for anything that cannot be a hostname. Spreadsheet and CSV
+    uploads treat every cell as a candidate, so this is what drops header
+    labels ("domain", "notes") and stray prose instead of scanning them.
+    """
     raw = raw.strip()
     raw = re.sub(r'^https?://', '', raw, flags=re.IGNORECASE)
     raw = raw.split('/')[0]          # drop any path
     raw = raw.split('?')[0]          # drop query string
-    return raw.lower()
+    raw = raw.strip().lower()
+
+    if '.' not in raw or any(c.isspace() for c in raw):
+        return ""
+    return raw
 
 
 def dedupe_domains(domains: list) -> list:
@@ -56,8 +73,85 @@ def dedupe_domains(domains: list) -> list:
     return unique
 
 
+def is_google_only(ads_txt: str) -> bool:
+    """
+    True when google.com is the SOLE demand source declared in an ads.txt file.
+
+    Comments (full-line and inline, per the ads.txt spec `#` runs to end of line),
+    blank lines and variable declarations are ignored. Every remaining entry's
+    domain field (the first comma-separated field) must be exactly `google.com`,
+    case-insensitively. A file with no entries at all is not a match.
+    """
+    has_entry = False
+
+    for line in ads_txt.splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line or VARIABLE_LINE.match(line):
+            continue
+
+        exchange_domain = line.split(',', 1)[0].strip().lower()
+        if not exchange_domain:
+            continue
+
+        has_entry = True
+        if exchange_domain != GOOGLE_DOMAIN:
+            return False
+
+    return has_entry
+
+
+def _looks_like_html(text: str) -> bool:
+    """True for a web page. A real ads.txt never opens with markup."""
+    head = text[:600].lstrip().lower()
+    return head.startswith("<!doctype") or head.startswith("<html") or "<html" in head
+
+
+def _served_ads_txt(resp) -> bool:
+    """
+    True when a 200 response really is an ads.txt file.
+
+    Two ways it can fail: a redirect landed us somewhere that isn't /ads.txt
+    (common — an alias domain redirects to its canonical host and drops the
+    path), or the server returned its web page with a 200 instead of a 404.
+    """
+    if not urlparse(resp.url).path.rstrip("/").lower().endswith("ads.txt"):
+        return False
+    return not _looks_like_html(resp.text)
+
+
+def _ads_txt_body(resp, tried: set):
+    """
+    Return the ads.txt text for a 200 response, or None if there isn't one.
+
+    When a redirect dropped the /ads.txt path, retry the canonical host once —
+    e.g. auto-bild.de/ads.txt redirects to www.autobild.de/ (the homepage) while
+    www.autobild.de/ads.txt serves the real file.
+    """
+    if _served_ads_txt(resp):
+        return resp.text
+
+    host = urlparse(resp.url).netloc
+    if not host or host in tried:
+        return None                   # same host we already asked — don't loop
+    tried.add(host)
+
+    try:
+        retry = requests.get(
+            f"https://{host}/ads.txt",
+            timeout=TIMEOUT,
+            headers={"User-Agent": "AdsTxtChecker/1.0"},
+            allow_redirects=True,
+        )
+    except requests.exceptions.RequestException:
+        return None
+
+    if retry.status_code == 200 and _served_ads_txt(retry):
+        return retry.text
+    return None
+
+
 def check_domain(domain: str) -> dict:
-    """Fetch /ads.txt for a domain and look for google.com."""
+    """Fetch /ads.txt for a domain and flag it when google.com is its only entry."""
     result = {
         "domain":      domain,
         "status":      "Failed",
@@ -65,6 +159,8 @@ def check_domain(domain: str) -> dict:
         "status_code": None,
         "error":       "",
     }
+
+    tried = {domain}
 
     for scheme in ("https", "http"):
         url = f"{scheme}://{domain}/ads.txt"
@@ -82,8 +178,15 @@ def check_domain(domain: str) -> dict:
                 return result
 
             if resp.status_code == 200:
+                body = _ads_txt_body(resp, tried)
+                if body is None:
+                    # 200, but it's a web page — the domain has no ads.txt
+                    result["status"] = "Not Found"
+                    result["error"] = "No ads.txt (served a web page)"
+                    return result
+
                 result["status"] = "Success"
-                if GOOGLE_PATTERN.search(resp.text):
+                if is_google_only(body):
                     result["google"] = "Yes"
                 return result
 
@@ -124,8 +227,58 @@ def run_job(job_id: str, domains: list):
     job["elapsed"]  = round(time.time() - job["started"], 1)
 
 
+def _summarize(raw_values: list, normalized_domains: list) -> dict:
+    unique = dedupe_domains(normalized_domains)
+    return {
+        "domains": unique,
+        "submitted": len(raw_values),
+        "normalized": len(normalized_domains),
+        "unique": len(unique),
+    }
+
+
+def parse_domains_from_csv(file_bytes: bytes) -> dict:
+    """Extract domains from a CSV/TSV upload, treating every cell as a candidate."""
+    # utf-8-sig strips the BOM Excel writes, which would otherwise corrupt the
+    # first domain (﻿fontyukle.net).
+    text = file_bytes.decode("utf-8-sig", errors="replace")
+    raw_values = []
+    normalized_domains = []
+
+    for row in csv.reader(io.StringIO(text)):
+        for cell in row:
+            if cell and cell.strip():
+                raw = cell.strip()
+                raw_values.append(raw)
+                cleaned = clean_domain(raw)
+                if cleaned:
+                    normalized_domains.append(cleaned)
+
+    return _summarize(raw_values, normalized_domains)
+
+
+def parse_domains_from_upload(filename: str, file_bytes: bytes) -> dict:
+    """
+    Route an upload to the right parser.
+
+    An .xlsx file is a zip archive and starts with "PK"; a CSV is plain text.
+    Sniffing the bytes rather than trusting the extension also handles files
+    saved with the wrong suffix.
+    """
+    if file_bytes.startswith(b"PK"):
+        return parse_domains_from_excel(file_bytes)
+
+    # OLE2 compound document — a genuine legacy .xls, which openpyxl cannot read
+    if file_bytes.startswith(b"\xd0\xcf\x11\xe0"):
+        raise ValueError(
+            "Old .xls format is not supported - re-save as .xlsx or .csv"
+        )
+
+    return parse_domains_from_csv(file_bytes)
+
+
 def parse_domains_from_excel(file_bytes: bytes) -> dict:
-    """Extract domains and return input summary for an xlsx/xls file."""
+    """Extract domains and return input summary for an xlsx file."""
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     raw_values = []
     normalized_domains = []
@@ -187,9 +340,11 @@ def _extract_domains_from_request():
     if "file" in request.files:
         f = request.files["file"]
         try:
-            parsed = parse_domains_from_excel(f.read())
+            parsed = parse_domains_from_upload(f.filename, f.read())
+        except ValueError as e:
+            return None, (str(e), 400)
         except Exception as e:
-            return None, (f"Could not read Excel file: {e}", 400)
+            return None, (f"Could not read file: {e}", 400)
         domains = parsed["domains"]
         submitted_count = parsed["submitted"]
         normalized_count = parsed["normalized"]
@@ -350,7 +505,7 @@ def _build_excel_bytes(results: list, summary: dict) -> bytes:
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "AdsTxt Results"
+    ws.title = "AdSense-Only Results"
 
     ws.append(["Run Summary", "Value"])
     ws.append(["Job ID", summary.get("job_id", "")])
@@ -361,7 +516,7 @@ def _build_excel_bytes(results: list, summary: dict) -> bytes:
     ws.append(["Invalid Skipped", summary.get("invalid_skipped", "")])
     ws.append([])
 
-    headers = ["Domain", "Status", "Google.com Present", "HTTP Code", "Error"]
+    headers = ["Domain", "Status", "AdSense Only", "HTTP Code", "Error"]
     ws.append(headers)
 
     header_fill = PatternFill("solid", fgColor="1A1A2E")
